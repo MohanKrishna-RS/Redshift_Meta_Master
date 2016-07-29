@@ -129,7 +129,7 @@ class redshift_handler:
 
   def meta_merger(self, meta_path_list):
     req_meta = {}
-    for meta in meta_list:
+    for meta in meta_path_list:
       data = json.load(open(meta))
       if req_meta == {} :
         req_meta = data
