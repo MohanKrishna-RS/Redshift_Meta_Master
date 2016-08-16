@@ -1,3 +1,4 @@
+#python 2.7.6
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import json
@@ -7,12 +8,13 @@ import os
 
 class redshift_handler:
   
-  def __init__(self, db, user, password, host, port):
+  def __init__(self, db, user, password, host, port, alter):
     self.db = db
     self.user = user
     self.password = password
     self.host = host
     self.port = port
+    self.alter = alter
 
   def connect_DB(self, r_DB=None):
     r_DB = r_DB if r_DB else self.db
@@ -101,16 +103,41 @@ class redshift_handler:
     return "CREATE TABLE " + table_name +'(' + (', ').join(columns) + ')'\
            + sort_query + ';'
 
+  def alter_query(self, table_name, column_properties,
+                  create_columns, alter_columns):
+    columns = []
+    #for add column
+    for col in create_columns:
+      column_type = 'ADD COLUMN' + col + ' '\
+                    + column_properties[col]['type']
+      if column_properties[col]['is_nullable'] == 'NO' :
+        column_type += ' NOT NULL'
+      columns.append(column_type)
+      
+    return "ALTER TABLE " + table_name +' ' + (', ').join(columns) + ';'
+    
+
   def table_updater(self, req_table_meta, dest_DB = None):
     con = self.connect_DB(dest_DB)
     cur = con.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    print "Creating Tables ........."
+    print "......... Tables ........."
     for table in self.get_tables_and_views()['tables']:
-      if cmp(self.column_details(table,cur), req_table_meta['meta']['table'][table]) != 0 :
-        try: cur.execute("DROP TABLE " + table + ";")
-        except: pass
-        cur.execute(self.create_query(table, req_table_meta['meta']['table'][table]))
-        print '- ' + table
+      column_detail = self.column_details(table,cur)
+      req_column_detail = req_table_meta['meta']['table'][table]
+      if cmp(column_detail, req_column_detail) != 0 :
+        if self.alter == 1:
+          create_columns = set(req_column_detail.keys()) - set(column_detail.keys())
+          rem_columns = set(req_column_detail.keys()) - create_columns
+          alter_columns = [i for i in rem_columns
+                           if cmp(column_detail[i],req_column_detail[i]) != 0]
+          cur.execute(self.alter_query(table, req_column_detail,
+                                       create_columns, alter_columns))
+          print '- ' + table + ' updated'
+        else:
+          try: cur.execute("DROP TABLE " + table + ";")
+          except: pass
+          cur.execute(self.create_query(table, req_column_detail))
+          print '- ' + table + ' created'
       con.commit()
     con.close()
     print "Done !!"
@@ -129,7 +156,7 @@ class redshift_handler:
 
   def meta_merger(self, meta_path_list):
     req_meta = {}
-    for meta in meta_list:
+    for meta in meta_path_list:
       data = json.load(open(meta))
       if req_meta == {} :
         req_meta = data
@@ -162,15 +189,19 @@ if __name__ == '__main__':
   parser.add_argument("-v","--view_handler", help="Updating views. File path required.")
   parser.add_argument("-c","--copy_DB", help="Required destination DB")
   parser.add_argument("-s","--schema_deploy", help="Multiple Schema file path must be sepearated by ','")
-
+  parser.add_argument("-u","--update_DB", help="updating rather than droping", action="store_true")
   args = parser.parse_args()
   
+  alter = 0
+  if args.update_DB:
+    alter = 1
+    
   c = redshift_handler(db=os.environ.get('MART_DB_NAME'),
                        user=os.environ.get('MART_DB_USERNAME'),
                        password=os.environ.get('MART_DB_PASSWORD'),
                        host=os.environ.get('MART_DB_HOST'),
-                       port='5439')    
-
+                       port='5439',
+                       alter=alter)
   if args.schema_export:
     c.schema_export(args.schema_export)
   if args.view_handler:
@@ -179,4 +210,5 @@ if __name__ == '__main__':
     c.copy_DB(args.copy_DB)
   if args.schema_deploy:
     c.schema_deploy(args.schema_deploy)
+  
   
